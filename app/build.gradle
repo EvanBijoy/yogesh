@@ -54,5 +54,7 @@ dependencies {
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 
-    implementation fileTree(include: ['*.aar'], dir: 'libs')
+    implementation(name: 'snpe-release', ext: 'aar')
+    implementation(name: 'platform-validator', ext: 'aar')
+
 }
