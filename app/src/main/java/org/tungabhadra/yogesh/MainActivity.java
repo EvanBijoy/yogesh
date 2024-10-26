@@ -1,73 +1,92 @@
 package org.tungabhadra.yogesh;
 
-import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.CPU;
-import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.DSP;
-import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.GPU;
-
-import android.content.res.AssetManager;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
-
-import androidx.activity.EdgeToEdge;
+import android.view.SurfaceView;
+import android.widget.Toast;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
-
-import com.qualcomm.qti.platformvalidator.PlatformValidator;
-import com.qualcomm.qti.platformvalidator.PlatformValidatorUtil;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import com.qualcomm.qti.snpe.NeuralNetwork;
-import com.qualcomm.qti.snpe.SNPE;
-
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import org.tungabhadra.yogesh.helpers.CameraHelper;
+import org.tungabhadra.yogesh.helpers.ModelHelper;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int PERMISSION_REQUEST_CAMERA = 1;
+
+    private NeuralNetwork neuralNetwork;
+    private CameraHelper cameraHelper;
+    private ModelHelper modelHelper;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
-        });
 
-        PlatformValidator pv = new PlatformValidator(PlatformValidatorUtil.Runtime.DSP);
-// To check in general runtime is working use isRuntimeAvailable
-        boolean check = pv.isRuntimeAvailable(getApplication());
-        System.out.println(check);
-// To check Qualcomm (R) Neural Processing SDK runtime is working use runtimeCheck
-        check = pv.runtimeCheck(getApplication());
-        System.out.println(check);
-//To get core version use libVersion api
-        String str = pv.coreVersion(getApplication());
-        System.out.println(str);
-//To get core version use coreVersion api
-        str = pv.coreVersion(getApplication());
+        if (checkCameraPermission()) {
+            initializeComponents();
+        } else {
+            requestCameraPermission();
+        }
+    }
 
-        System.out.println(str);
-        AssetManager assetManager = getAssets();
-
+    private void initializeComponents() {
+        // Initialize model
+        modelHelper = new ModelHelper();
         try {
-            InputStream is = getAssets().open("model.dlc");
-            int size = is.available();
-
-            final SNPE.NeuralNetworkBuilder builder;
-            builder = new SNPE.NeuralNetworkBuilder(getApplication())
-                    // Allows selecting a runtime order for the network.
-                    // In the example below use DSP and fall back, in order, to GPU then CPU
-                    // depending on whether any of the runtimes is available.
-                    .setRuntimeOrder(DSP, GPU, CPU)
-                    // Loads a model from DLC file
-                    .setModel(is, size);
-            final NeuralNetwork network = builder.build();
+            neuralNetwork = modelHelper.loadModel(getApplication());
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            e.printStackTrace();
+            Toast.makeText(this, "Failed to load neural network", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Initialize views
+        SurfaceView cameraSurfaceView = findViewById(R.id.cameraSurfaceView);
+        SurfaceView overlaySurfaceView = findViewById(R.id.overlaySurfaceView);
+
+        // Initialize camera helper with both surfaces
+        cameraHelper = new CameraHelper(this, cameraSurfaceView, overlaySurfaceView, neuralNetwork);
+        cameraHelper.startCamera();
+    }
+
+    private boolean checkCameraPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestCameraPermission() {
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{Manifest.permission.CAMERA},
+                PERMISSION_REQUEST_CAMERA
+        );
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSION_REQUEST_CAMERA) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                initializeComponents();
+            } else {
+                Toast.makeText(this, "Camera permission is required", Toast.LENGTH_SHORT).show();
+                finish();
+            }
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (neuralNetwork != null) {
+            neuralNetwork.release();
+        }
+        if (cameraHelper != null) {
+            cameraHelper.shutdown();
         }
     }
 }
