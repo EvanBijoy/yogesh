@@ -1,5 +1,10 @@
 package org.tungabhadra.yogesh;
 
+import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.CPU;
+import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.DSP;
+import static com.qualcomm.qti.snpe.NeuralNetwork.Runtime.GPU;
+
+import android.content.res.AssetManager;
 import android.os.Bundle;
 
 import androidx.activity.EdgeToEdge;
@@ -10,6 +15,14 @@ import androidx.core.view.WindowInsetsCompat;
 
 import com.qualcomm.qti.platformvalidator.PlatformValidator;
 import com.qualcomm.qti.platformvalidator.PlatformValidatorUtil;
+import com.qualcomm.qti.snpe.NeuralNetwork;
+import com.qualcomm.qti.snpe.SNPE;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -38,5 +51,23 @@ public class MainActivity extends AppCompatActivity {
         str = pv.coreVersion(getApplication());
 
         System.out.println(str);
+        AssetManager assetManager = getAssets();
+
+        try {
+            InputStream is = getAssets().open("model.dlc");
+            int size = is.available();
+
+            final SNPE.NeuralNetworkBuilder builder;
+            builder = new SNPE.NeuralNetworkBuilder(getApplication())
+                    // Allows selecting a runtime order for the network.
+                    // In the example below use DSP and fall back, in order, to GPU then CPU
+                    // depending on whether any of the runtimes is available.
+                    .setRuntimeOrder(DSP, GPU, CPU)
+                    // Loads a model from DLC file
+                    .setModel(is, size);
+            final NeuralNetwork network = builder.build();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }
