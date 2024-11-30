@@ -1,35 +1,29 @@
 package org.tungabhadra.yogesh.helpers;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.util.Size;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraManager;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import androidx.annotation.NonNull;
-import androidx.camera.core.Camera;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageProxy;
-import androidx.camera.core.Preview;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.core.content.ContextCompat;
-import androidx.lifecycle.LifecycleOwner;
-import com.google.common.util.concurrent.ListenableFuture;
 import com.qualcomm.qti.snpe.NeuralNetwork;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import org.tungabhadra.yogesh.YogaSequenceManager;
 
 public class CameraHelper implements SurfaceHolder.Callback {
     private final Context context;
     private final SurfaceView cameraSurfaceView;
     private final SurfaceView overlaySurfaceView;
     private final NeuralNetwork neuralNetwork;
-    private final ExecutorService cameraExecutor;
-    private final OverlayHelper overlayHelper;
+    private final Paint paint;
+    private YogaSequenceManager sequenceManager;
+    private PoseDetectionListener poseDetectionListener;
 
-    private ProcessCameraProvider cameraProvider;
-    private ImageAnalysis imageAnalysis;
-    private Preview preview;
+    public interface PoseDetectionListener {
+        void onPoseDetected(String detectedPose);
+        void onPoseConfirmed(String confirmedPose);
+    }
 
     public CameraHelper(Context context, SurfaceView cameraSurfaceView,
                         SurfaceView overlaySurfaceView, NeuralNetwork neuralNetwork) {
@@ -37,99 +31,129 @@ public class CameraHelper implements SurfaceHolder.Callback {
         this.cameraSurfaceView = cameraSurfaceView;
         this.overlaySurfaceView = overlaySurfaceView;
         this.neuralNetwork = neuralNetwork;
-        this.cameraExecutor = Executors.newSingleThreadExecutor();
-        this.overlayHelper = new OverlayHelper(overlaySurfaceView);
 
-        // Set up surface holder callbacks
+        // Initialize paint for drawing
+        paint = new Paint();
+        paint.setColor(Color.GREEN);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3.0f);
+        paint.setTextSize(48f);
+
+        // Set up surface holders
         cameraSurfaceView.getHolder().addCallback(this);
+        overlaySurfaceView.getHolder().setFormat(android.graphics.PixelFormat.TRANSPARENT);
+        overlaySurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                drawOverlay();
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                drawOverlay();
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+            }
+        });
+    }
+
+    public void setSequenceManager(YogaSequenceManager sequenceManager) {
+        this.sequenceManager = sequenceManager;
+    }
+
+    public void setPoseDetectionListener(PoseDetectionListener listener) {
+        this.poseDetectionListener = listener;
+    }
+
+    private void drawOverlay() {
+        if (sequenceManager != null) {
+            YogaSequenceManager.YogaPose currentPose = sequenceManager.getCurrentPose();
+            if (currentPose != null) {
+                Canvas canvas = overlaySurfaceView.getHolder().lockCanvas();
+                if (canvas != null) {
+                    try {
+                        // Clear the canvas
+                        canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
+
+                        // Draw the target pose name
+                        String targetPose = "Target Pose: " + currentPose.getName();
+                        canvas.drawText(targetPose, 50, 100, paint);
+
+                        // You can add more overlay drawing here
+                    } finally {
+                        overlaySurfaceView.getHolder().unlockCanvasAndPost(canvas);
+                    }
+                }
+            }
+        }
+    }
+
+    // Add this method to handle pose detection results
+    public void onPoseDetected(String detectedPose) {
+        if (sequenceManager != null && poseDetectionListener != null) {
+            YogaSequenceManager.YogaPose currentPose = sequenceManager.getCurrentPose();
+            if (currentPose != null && detectedPose.equals(currentPose.getName())) {
+                poseDetectionListener.onPoseConfirmed(detectedPose);
+            }
+            poseDetectionListener.onPoseDetected(detectedPose);
+        }
+        updateOverlay(detectedPose);
+    }
+
+    private void updateOverlay(String detectedPose) {
+        Canvas canvas = overlaySurfaceView.getHolder().lockCanvas();
+        if (canvas != null) {
+            try {
+                // Clear the canvas
+                canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
+
+                // Draw the detected pose
+                canvas.drawText("Detected: " + detectedPose, 50, 200, paint);
+
+                // Draw the target pose if available
+                if (sequenceManager != null) {
+                    YogaSequenceManager.YogaPose currentPose = sequenceManager.getCurrentPose();
+                    if (currentPose != null) {
+                        String targetPose = "Target: " + currentPose.getName();
+                        canvas.drawText(targetPose, 50, 100, paint);
+                    }
+                }
+            } finally {
+                overlaySurfaceView.getHolder().unlockCanvasAndPost(canvas);
+            }
+        }
+    }
+
+    // Implement remaining SurfaceHolder.Callback methods
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        // Initialize camera
+        startCamera();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        // Handle surface changes
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // Clean up camera resources
+        shutdown();
     }
 
     public void startCamera() {
-        ListenableFuture<ProcessCameraProvider> cameraProviderFuture =
-                ProcessCameraProvider.getInstance(context);
-
-        cameraProviderFuture.addListener(() -> {
-            try {
-                cameraProvider = cameraProviderFuture.get();
-                bindCameraUseCases();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }, ContextCompat.getMainExecutor(context));
-    }
-
-    private void bindCameraUseCases() {
-        if (cameraProvider == null) return;
-
-        // Camera selector
-        CameraSelector cameraSelector = new CameraSelector.Builder()
-                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                .build();
-
-        // Preview use case
-        preview = new Preview.Builder().build();
-
-        // Image analysis use case
-        imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build();
-
-        imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeImage);
-
         try {
-            cameraProvider.unbindAll();
-            Camera camera = cameraProvider.bindToLifecycle(
-                    (LifecycleOwner) context,
-                    cameraSelector,
-                    preview,
-                    imageAnalysis
-            );
+            CameraManager cameraManager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
+            // Add your camera initialization code here
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private void analyzeImage(ImageProxy imageProxy) {
-        try {
-            Bitmap bitmap = ImageUtils.imageToBitmap(imageProxy);
-            runInference(bitmap);
-        } finally {
-            imageProxy.close();
-        }
-    }
-
-    private void runInference(Bitmap bitmap) {
-        // TODO: Implement the actual inference logic here
-        // 1. Prepare the input tensor from bitmap
-        // 2. Run the neural network
-        // 3. Process the output to get keypoints
-        // 4. Use overlayHelper to draw the keypoints
-
-        // Example pseudocode:
-        // float[] inputTensor = prepareInputTensor(bitmap);
-        // float[] output = neuralNetwork.execute(inputTensor);
-        // PointF[] keypoints = processOutput(output);
-        // overlayHelper.drawKeypoints(keypoints);
-    }
-
-    @Override
-    public void surfaceCreated(@NonNull SurfaceHolder holder) {
-        // Surface is created, bind camera use cases
-        bindCameraUseCases();
-    }
-
-    @Override
-    public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
-        // Handle surface changes if needed
-    }
-
-    @Override
-    public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-        // Clean up if needed
-    }
-
     public void shutdown() {
-        cameraExecutor.shutdown();
+        // Add your cleanup code here
     }
 }
